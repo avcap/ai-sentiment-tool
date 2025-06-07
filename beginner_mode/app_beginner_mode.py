@@ -1,113 +1,96 @@
-import streamlit as st
+from beginner_mode.data_utils_beginner import load_data, calculate_indicators
+from beginner_mode.chart_utils_beginner import plot_candlestick
+
 import pandas as pd
+import streamlit as st
 from ta.trend import EMAIndicator
 from ta.volume import VolumeWeightedAveragePrice
-from datetime import datetime
-import pytz
-import os
+import mplfinance as mpf
+import matplotlib.pyplot as plt
 
-# Set file paths
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data", "fixed")
+# === CONFIG ===
+DATA_DIR = "data/fixed"
+TICKER = "SPY"
 
-daily_path = os.path.join(DATA_DIR, "SPY_1d.csv")
-hourly_path = os.path.join(DATA_DIR, "SPY_1h.csv")
-min15_path = os.path.join(DATA_DIR, "SPY_15m.csv")
+# === UTILITY FUNCTIONS ===
+def find_last_range_day_open(daily_df, today_open, current_date):
+    dates = sorted(set(daily_df.index.date))
+    try:
+        current_idx = dates.index(current_date)
+    except ValueError:
+        return None, None, None  # If date not found in daily_df
 
-# Load and clean CSV
-def load_and_prepare(path):
-    df = pd.read_csv(path)
-    df.columns = ['Datetime', 'Close', 'High', 'Low', 'Open', 'Volume']  # force consistent naming
-    df['Datetime'] = pd.to_datetime(df['Datetime'])
-    df.set_index('Datetime', inplace=True)
-    df.sort_index(inplace=True)
-    return df
+    for i in range(current_idx - 1, -1, -1):
+        prev_day_df = daily_df[daily_df.index.date == dates[i]]
+        if not prev_day_df.empty:
+            prev = prev_day_df.iloc[0]
+            if prev["Low"] <= today_open <= prev["High"]:
+                return prev["High"], prev["Low"], prev.name.date()
+    return None, None, None
 
-daily_df = load_and_prepare(daily_path)
-hourly_df = load_and_prepare(hourly_path)
-min15_df = load_and_prepare(min15_path)
-
-st.title("Beginner Mode: SPY Sentiment Analysis")
-
-# ====== DAILY ANALYSIS (Yesterday High/Low) ======
-yesterday = daily_df.index[-2]
-today = daily_df.index[-1]
-
-yesterday_high = daily_df.loc[yesterday]['High']
-yesterday_low = daily_df.loc[yesterday]['Low']
-today_open = daily_df.loc[today]['Open']
-
-# Calculate EMAs and VWAP
-ema9 = EMAIndicator(close=daily_df['Close'], window=9).ema_indicator().iloc[-1]
-ema21 = EMAIndicator(close=daily_df['Close'], window=21).ema_indicator().iloc[-1]
-vwap = VolumeWeightedAveragePrice(high=daily_df['High'], low=daily_df['Low'], close=daily_df['Close'], volume=daily_df['Volume']).volume_weighted_average_price().iloc[-1]
-
-# Determine trend
-if today_open > yesterday_high and today_open > ema9 and today_open > ema21 and today_open > vwap:
-    daily_trend = "Bullish"
-elif today_open < yesterday_low and today_open < ema9 and today_open < ema21 and today_open < vwap:
-    daily_trend = "Bearish"
-else:
-    daily_trend = "Sideways / Undecided"
-
-st.subheader("1D Trend Analysis")
-st.write(f"Yesterday High: {yesterday_high:.2f}, Low: {yesterday_low:.2f}")
-st.write(f"Today's Open: {today_open:.2f}")
-st.write(f"EMA 9: {ema9:.2f}, EMA 21: {ema21:.2f}, VWAP: {vwap:.2f}")
-st.success(f"Trend: {daily_trend}")
-
-# ====== HOURLY ANALYSIS (Simulate 10:30 AM Eastern = 14:30 UTC) ======
-eastern = pytz.timezone("US/Eastern")
-target_et = eastern.localize(datetime(2025, 6, 6, 10, 30))
-target_utc = target_et.astimezone(pytz.utc)
-
-if target_utc in hourly_df.index:
-    hour_candle = hourly_df.loc[target_utc]
-    h_close = hour_candle["Close"]
-    h_ema9 = EMAIndicator(close=hourly_df['Close'], window=9).ema_indicator().loc[target_utc]
-    h_ema21 = EMAIndicator(close=hourly_df['Close'], window=21).ema_indicator().loc[target_utc]
-    h_vwap = VolumeWeightedAveragePrice(high=hourly_df['High'], low=hourly_df['Low'], close=hourly_df['Close'], volume=hourly_df['Volume']).volume_weighted_average_price().loc[target_utc]
-
-    if h_close > h_ema9 and h_close > h_ema21 and h_close > h_vwap:
-        hour_trend = "Bullish Continuation"
-    elif h_close < h_ema9 and h_close < h_ema21 and h_close < h_vwap:
-        hour_trend = "Bearish Continuation"
+def determine_trend(df):
+    last = df.iloc[-1]
+    if pd.isna(last["EMA9"]) or pd.isna(last["EMA21"]) or pd.isna(last["VWAP"]):
+        return "Insufficient data"
+    if last["Close"] > last["EMA9"] > last["EMA21"] > last["VWAP"]:
+        return "Uptrend"
+    elif last["Close"] < last["EMA9"] < last["EMA21"] < last["VWAP"]:
+        return "Downtrend"
     else:
-        hour_trend = "Possible Reversal / Sideways"
+        return "Sideways / Undecided"
 
-    st.subheader("1H Trend Confirmation (10:30 AM)")
-    st.write(f"Close: {h_close:.2f}, EMA 9: {h_ema9:.2f}, EMA 21: {h_ema21:.2f}, VWAP: {h_vwap:.2f}")
-    st.info(f"1H Sentiment: {hour_trend}")
+# === STREAMLIT APP ===
+st.set_page_config(layout="wide", page_title="Beginner Mode - SPY Analysis")
+st.title(f"📈 Beginner Mode: {TICKER} Analysis")
+
+# Load CSVs
+daily_df = load_data(f"{DATA_DIR}/{TICKER}_1d.csv")
+hourly_df = load_data(f"{DATA_DIR}/{TICKER}_1h.csv")
+min15_df = load_data(f"{DATA_DIR}/{TICKER}_15m.csv")
+
+# === Date Selection ===
+available_dates = sorted(set(min15_df.index.date), reverse=True)
+selected_date = st.selectbox("Select Trading Day for Analysis", available_dates)
+selected_open_row = min15_df[min15_df.index.date == selected_date]
+
+if selected_open_row.empty:
+    st.error("No 15-minute data for the selected date.")
+    st.stop()
+
+today_open = selected_open_row.iloc[0]["Open"]
+current_date = selected_open_row.index[0].date()
+
+# === Step 1: Daily Range Check ===
+high, low, ref_date = find_last_range_day_open(daily_df, today_open, current_date)
+
+if high is not None:
+    st.subheader("📊 1D Range Analysis")
+    st.markdown(f"- 📅 **Reference Day:** `{ref_date}`")
+    st.markdown(f"- 🔼 **Resistance (High):** `{high:.2f}`")
+    st.markdown(f"- 🔽 **Support (Low):** `{low:.2f}`")
+    st.markdown(f"- 📌 **Today's Open:** `{today_open:.2f}`")
 else:
-    st.warning("10:30 AM 1H candle not found in hourly data.")
+    st.error("❗ Today's open is outside the high/low of recent daily candles. Could indicate breakout.")
 
-# ====== 15M ANALYSIS (Retracement or Reversal) ======
-last_15m = min15_df.iloc[-1]
-retracement_zone = [0.5, 0.618]
-high = min15_df['High'].max()
-low = min15_df['Low'].min()
-pullback = last_15m["Close"]
+# === Step 2: 1H Trend Confirmation ===
+hourly_df = calculate_indicators(hourly_df)
+last_hour = hourly_df.loc[hourly_df.index.date == current_date]
+if not last_hour.empty:
+    last_hour = last_hour.iloc[-1]
+    trend = determine_trend(hourly_df)
 
-fib_50 = high - (high - low) * retracement_zone[0]
-fib_61 = high - (high - low) * retracement_zone[1]
-
-if fib_61 <= pullback <= fib_50:
-    action_advice = "Watch for Trend Continuation (Good Entry Zone)"
-elif pullback < fib_61:
-    action_advice = "Caution: Possible Reversal Below 61% Fib"
+    st.subheader("⏰ 1H Trend Confirmation")
+    st.markdown(f"""
+    - **Close:** `{last_hour['Close']:.2f}`  
+    - **EMA 9:** `{last_hour['EMA9']:.2f}`  
+    - **EMA 21:** `{last_hour['EMA21']:.2f}`  
+    - **VWAP:** `{last_hour['VWAP']:.2f}`  
+    - **Trend Bias:** `{trend}`
+    """)
 else:
-    action_advice = "Extended Move – Wait for Pullback"
+    st.warning("⚠️ No hourly data found for selected day.")
 
-st.subheader("15M Fib Retracement Analysis")
-st.write(f"Fib Zone: {fib_61:.2f} – {fib_50:.2f}, Last Close: {pullback:.2f}")
-st.warning(action_advice)
-
-# ====== Final Summary ======
-st.subheader("Beginner Sentiment Summary")
-st.write(f"- Daily Trend: **{daily_trend}**")
-if 'hour_trend' in locals():
-    st.write(f"- 1H Confirmation: **{hour_trend}**")
-st.write(f"- 15M Analysis: **{action_advice}**")
-
-
+# === Step 3: 15-Minute Candlestick Chart ===
+st.subheader("🕒 15-Minute Chart View")
+plot_candlestick(min15_df[min15_df.index.date == selected_date], title=f"{TICKER} 15-Min Chart — {selected_date}")
 
