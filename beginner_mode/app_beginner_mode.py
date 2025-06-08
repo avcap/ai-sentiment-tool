@@ -1,96 +1,117 @@
-from beginner_mode.data_utils_beginner import load_data, calculate_indicators
-from beginner_mode.chart_utils_beginner import plot_candlestick
-
-import pandas as pd
 import streamlit as st
-from ta.trend import EMAIndicator
-from ta.volume import VolumeWeightedAveragePrice
-import mplfinance as mpf
+import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from datetime import datetime, time
 
-# === CONFIG ===
-DATA_DIR = "data/fixed"
-TICKER = "SPY"
+# Load and preprocess data
+@st.cache_data
+def load_and_prepare_data():
+    def load_csv(file):
+        df = pd.read_csv(file)
+        df.columns = [col.strip() for col in df.columns]
+        df['Datetime'] = pd.to_datetime(df.iloc[:, 0], utc=True).dt.tz_convert("America/New_York")
+        df.set_index('Datetime', inplace=True)
+        return df
 
-# === UTILITY FUNCTIONS ===
-def find_last_range_day_open(daily_df, today_open, current_date):
-    dates = sorted(set(daily_df.index.date))
-    try:
-        current_idx = dates.index(current_date)
-    except ValueError:
-        return None, None, None  # If date not found in daily_df
+    df_1d = pd.read_csv("data/fixed/SPY_1d.csv")
+    df_1d.columns = [col.strip() for col in df_1d.columns]
+    df_1d['Date'] = pd.to_datetime(df_1d.iloc[:, 0]).dt.date
 
-    for i in range(current_idx - 1, -1, -1):
-        prev_day_df = daily_df[daily_df.index.date == dates[i]]
-        if not prev_day_df.empty:
-            prev = prev_day_df.iloc[0]
-            if prev["Low"] <= today_open <= prev["High"]:
-                return prev["High"], prev["Low"], prev.name.date()
-    return None, None, None
+    df_1h = load_csv("data/fixed/SPY_1h.csv")
+    df_15m = load_csv("data/fixed/SPY_15m.csv")
 
-def determine_trend(df):
-    last = df.iloc[-1]
-    if pd.isna(last["EMA9"]) or pd.isna(last["EMA21"]) or pd.isna(last["VWAP"]):
-        return "Insufficient data"
-    if last["Close"] > last["EMA9"] > last["EMA21"] > last["VWAP"]:
-        return "Uptrend"
-    elif last["Close"] < last["EMA9"] < last["EMA21"] < last["VWAP"]:
-        return "Downtrend"
-    else:
-        return "Sideways / Undecided"
+    return df_1d, df_1h, df_15m
 
-# === STREAMLIT APP ===
-st.set_page_config(layout="wide", page_title="Beginner Mode - SPY Analysis")
-st.title(f"📈 Beginner Mode: {TICKER} Analysis")
+# Load the data
+df_1d, df_1h, df_15m = load_and_prepare_data()
 
-# Load CSVs
-daily_df = load_data(f"{DATA_DIR}/{TICKER}_1d.csv")
-hourly_df = load_data(f"{DATA_DIR}/{TICKER}_1h.csv")
-min15_df = load_data(f"{DATA_DIR}/{TICKER}_15m.csv")
+# Select available dates from actual intersection of intraday charts
+available_dates = sorted(list(set(df_1h.index.date) & set(df_15m.index.date)))
+selected_date = st.selectbox("\U0001F4C5 Select Date", available_dates, index=len(available_dates)-1)
 
-# === Date Selection ===
-available_dates = sorted(set(min15_df.index.date), reverse=True)
-selected_date = st.selectbox("Select Trading Day for Analysis", available_dates)
-selected_open_row = min15_df[min15_df.index.date == selected_date]
+# Define open from first 1H candle after 9:30 AM
+session_start = time(9, 00)
+open_today = None
+try:
+    first_candle = df_1h[(df_1h.index.date == selected_date) & (df_1h.index.time >= session_start)].iloc[0]
+    open_today = first_candle['Open']
+except IndexError:
+    pass
 
-if selected_open_row.empty:
-    st.error("No 15-minute data for the selected date.")
-    st.stop()
+# Support and resistance based on prior days
+resistance, support = None, None
+res_day, sup_day = None, None
+if open_today:
+    prior_days = df_1d[df_1d['Date'] < selected_date]
+    res_row = prior_days[prior_days['High'] > open_today].tail(1)
+    if not res_row.empty:
+        resistance = res_row['High'].values[0]
+        res_day = res_row['Date'].values[0]
 
-today_open = selected_open_row.iloc[0]["Open"]
-current_date = selected_open_row.index[0].date()
+    sup_row = prior_days[prior_days['Low'] < open_today].tail(1)
+    if not sup_row.empty:
+        support = sup_row['Low'].values[0]
+        sup_day = sup_row['Date'].values[0]
 
-# === Step 1: Daily Range Check ===
-high, low, ref_date = find_last_range_day_open(daily_df, today_open, current_date)
+# Display daily analysis
+st.subheader("\U0001F4CA 1D Support & Resistance Analysis")
+st.markdown(f"**Resistance:** `{resistance:.2f}` *(from {res_day})*" if resistance else "`No resistance found`")
+st.markdown(f"**Support:** `{support:.2f}` *(from {sup_day})*" if support else "`No support found`")
+st.markdown(f"**Today's Open (first 1H after 9:30 AM):** `{open_today:.2f}`" if open_today else "`No valid open found`")
 
-if high is not None:
-    st.subheader("📊 1D Range Analysis")
-    st.markdown(f"- 📅 **Reference Day:** `{ref_date}`")
-    st.markdown(f"- 🔼 **Resistance (High):** `{high:.2f}`")
-    st.markdown(f"- 🔽 **Support (Low):** `{low:.2f}`")
-    st.markdown(f"- 📌 **Today's Open:** `{today_open:.2f}`")
+# Extract 09:30 and 10:30 candles from 1H
+st.subheader("\U0001F552 1H Key Candle Snapshots")
+snapshot_times = [time(9, 00), time(11, 00)]
+hourly_today = df_1h[df_1h.index.date == selected_date]
+snapshot_candles = hourly_today[hourly_today.index.map(lambda x: x.time() in snapshot_times)]
+if snapshot_candles.empty:
+    st.info("No 09:30 or 10:30 candles for this day.")
 else:
-    st.error("❗ Today's open is outside the high/low of recent daily candles. Could indicate breakout.")
+    st.dataframe(snapshot_candles[['Open', 'High', 'Low', 'Close', 'Volume']])
 
-# === Step 2: 1H Trend Confirmation ===
-hourly_df = calculate_indicators(hourly_df)
-last_hour = hourly_df.loc[hourly_df.index.date == current_date]
-if not last_hour.empty:
-    last_hour = last_hour.iloc[-1]
-    trend = determine_trend(hourly_df)
+# Chart plotting function with zoom on 09:30–11:30
 
-    st.subheader("⏰ 1H Trend Confirmation")
-    st.markdown(f"""
-    - **Close:** `{last_hour['Close']:.2f}`  
-    - **EMA 9:** `{last_hour['EMA9']:.2f}`  
-    - **EMA 21:** `{last_hour['EMA21']:.2f}`  
-    - **VWAP:** `{last_hour['VWAP']:.2f}`  
-    - **Trend Bias:** `{trend}`
-    """)
-else:
-    st.warning("⚠️ No hourly data found for selected day.")
+def plot_chart(df, title):
+    fig, ax = plt.subplots(figsize=(10, 3))
+    filtered = df[(df.index.date == selected_date) &
+                  (df.index.time >= time(9, 00)) &
+                  (df.index.time <= time(11, 00))].copy()
 
-# === Step 3: 15-Minute Candlestick Chart ===
-st.subheader("🕒 15-Minute Chart View")
-plot_candlestick(min15_df[min15_df.index.date == selected_date], title=f"{TICKER} 15-Min Chart — {selected_date}")
+    if filtered.empty:
+        st.warning(f"No {title} data between 09:30–11:30 AM for {selected_date}.")
+        return
+
+    filtered['EMA 9'] = filtered['Close'].ewm(span=9).mean()
+    filtered['EMA 21'] = filtered['Close'].ewm(span=21).mean()
+    filtered['VWAP'] = (filtered['Close'] * filtered['Volume']).cumsum() / filtered['Volume'].cumsum()
+
+    ax.plot(filtered.index, filtered['EMA 9'], label='EMA 9', linewidth=1)
+    ax.plot(filtered.index, filtered['EMA 21'], label='EMA 21', linewidth=1)
+    ax.plot(filtered.index, filtered['VWAP'], label='VWAP', linestyle='--', linewidth=1)
+
+    for idx, row in filtered.iterrows():
+        color = 'green' if row['Close'] > row['Open'] else 'red'
+        ax.vlines(x=idx, ymin=row['Low'], ymax=row['High'], color=color, linewidth=1)
+        ax.vlines(x=idx, ymin=row['Open'], ymax=row['Close'], color=color, linewidth=4)
+
+    if support:
+        ax.axhline(support, linestyle='--', color='blue', label=f'Support ({sup_day})')
+    if resistance:
+        ax.axhline(resistance, linestyle='--', color='orange', label=f'Resistance ({res_day})')
+
+    ax.set_title(f"{title} for {selected_date}")
+    ax.legend()
+    ax.set_xlim([pd.Timestamp(f"{selected_date} 09:00", tz=filtered.index.tz),
+                 pd.Timestamp(f"{selected_date} 11:00", tz=filtered.index.tz)])
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M', tz=filtered.index.tz))
+    plt.xticks(rotation=45)
+    st.pyplot(fig)
+
+# Plot 1H and 15M windows
+st.subheader("\U0001F4C8 1H Chart")
+plot_chart(df_1h, "1H Candles")
+
+st.subheader("\U0001F553 15-Minute Chart")
+plot_chart(df_15m, "15-Minute Candles")
 

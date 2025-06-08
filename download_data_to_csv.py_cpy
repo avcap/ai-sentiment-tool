@@ -4,8 +4,8 @@ import os
 
 
 tickers = ["NVDA"]
-intervals = ["1d"]  # adjust based on what you want
-period = "5d"  # for intraday, or use start/end for '1d'
+intervals = ["1d", "1h", "15m"]  # adjust based on what you want
+period = "2d"  # for intraday, or use start/end for '1d'
 
 def download_with_retry(ticker, interval, retries=3, delay=10):
     for attempt in range(retries):

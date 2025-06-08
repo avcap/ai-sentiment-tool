@@ -1,28 +1,28 @@
-import os
 import pandas as pd
+import os
 
-data_dir = "data"
-fixed_dir = "data/fixed"
-os.makedirs(fixed_dir, exist_ok=True)
+folder = "/Users/acap/ai-sentiment-tool/data/fixed"
+files = ["SPY_1d.csv", "SPY_1h.csv", "SPY_15m.csv"]
 
-for file in os.listdir(data_dir):
-    if file.endswith(".csv"):
-        try:
-            path = os.path.join(data_dir, file)
-            df = pd.read_csv(path)
+for file in files:
+    path = os.path.join(folder, file)
+    print(f"Fixing: {file}")
+    
+    # Read the file, skipping the first 2 rows
+    df = pd.read_csv(path, skiprows=2)
 
-            # Drop rows where 'Close' is not a number
-            df = df[pd.to_numeric(df['Close'], errors='coerce').notnull()]
+    # Rename the first unnamed column to "Datetime"
+    if "Unnamed: 0" in df.columns:
+        df.rename(columns={"Unnamed: 0": "Datetime"}, inplace=True)
+    elif df.columns[0] != "Datetime":
+        df.rename(columns={df.columns[0]: "Datetime"}, inplace=True)
 
-            # Convert Date column to datetime and set index
-            if 'Date' in df.columns:
-                df['Date'] = pd.to_datetime(df['Date'])
-                df.set_index('Date', inplace=True)
+    # Convert and set index
+    df["Datetime"] = pd.to_datetime(df["Datetime"], errors="coerce")
+    df.set_index("Datetime", inplace=True)
+    df = df.sort_index()
 
-            # Save cleaned file
-            fixed_path = os.path.join(fixed_dir, file)
-            df.to_csv(fixed_path)
-            print(f"✅ Cleaned and saved: {fixed_path}")
-        except Exception as e:
-            print(f"❌ Failed to clean {file}: {e}")
+    # Save cleaned file
+    df.to_csv(path)
+    print(f"✔ Cleaned and saved: {file}")
 
