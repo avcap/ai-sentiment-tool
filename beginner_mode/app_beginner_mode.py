@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.dates as mdates
+import plotly.graph_objects as go
 from datetime import datetime, time
 
 # Load and preprocess data
@@ -27,15 +26,15 @@ def load_and_prepare_data():
 df_1d, df_1h, df_15m = load_and_prepare_data()
 
 # Selectable date from user input
-available_dates = sorted(list(set(df_1h.index.date) & set(df_15m.index.date)))
-selected_date = st.selectbox("📅 Select Date", sorted(available_dates, reverse=True), index=0)
+available_dates = sorted(list(set(df_1h.index.date) & set(df_15m.index.date)), reverse=True)
+selected_date = st.selectbox("📅 Select Date", available_dates, index=0)
 
 # Define market session window
 session_start = time(9, 30)
 session_end = time(11, 30)
 
 # Get last 5 trading days including and before selected date
-last_5_dates = [d for d in available_dates if d <= selected_date][-5:]
+last_5_dates = [d for d in available_dates if d <= selected_date][:5][::-1]
 
 # Get today's open from 1D CSV
 daily_row = df_1d[df_1d['Date'] == selected_date]
@@ -60,7 +59,7 @@ if open_today:
 st.subheader("\U0001F4CA 1D Support & Resistance Analysis")
 st.markdown(f"**Resistance:** `{resistance:.2f}` *(from {res_day})*" if resistance else "`No resistance found`")
 st.markdown(f"**Support:** `{support:.2f}` *(from {sup_day})*" if support else "`No support found`")
-st.markdown(f"**Today's Open (first candle after 9:30 AM):** `{open_today:.2f}`" if open_today else "`No valid open found`")
+st.markdown(f"**Today's Open (from 1D CSV):** `{open_today:.2f}`" if open_today else "`No valid open found`")
 
 st.subheader("\U0001F552 1H Key Candle Snapshots")
 hourly_today = df_1h[df_1h.index.date == selected_date]
@@ -71,44 +70,43 @@ if snapshot_window.empty:
 else:
     st.dataframe(snapshot_window[['Open', 'High', 'Low', 'Close', 'Volume']])
 
-def plot_chart(df, title):
-    fig, ax = plt.subplots(figsize=(10, 3))
+def plot_interactive_chart(df, title):
     mask = pd.Series(df.index.date, index=df.index).isin(last_5_dates)
-    filtered = df[mask & (df.index.time >= session_start) & (df.index.time <= session_end)].copy()
-
+    filtered = df[mask].copy()
     if filtered.empty:
-        st.warning(f"No {title} data between 09:30–11:30 AM for selected 5-day window.")
+        st.warning(f"No {title} data found for last 5 trading days.")
         return
 
-    filtered['EMA 9'] = filtered['Close'].ewm(span=9).mean()
-    filtered['EMA 21'] = filtered['Close'].ewm(span=21).mean()
-    filtered['VWAP'] = (filtered['Close'] * filtered['Volume']).cumsum() / filtered['Volume'].cumsum()
-
-    ax.plot(filtered.index, filtered['EMA 9'], label='EMA 9', linewidth=1)
-    ax.plot(filtered.index, filtered['EMA 21'], label='EMA 21', linewidth=1)
-    ax.plot(filtered.index, filtered['VWAP'], label='VWAP', linestyle='--', linewidth=1)
-
-    for idx, row in filtered.iterrows():
-        color = 'green' if row['Close'] > row['Open'] else 'red'
-        ax.vlines(x=idx, ymin=row['Low'], ymax=row['High'], color=color, linewidth=1)
-        if row['Open'] == row['Close']:
-            ax.scatter(idx, row['Open'], color=color, s=20)
-        else:
-            ax.vlines(x=idx, ymin=row['Open'], ymax=row['Close'], color=color, linewidth=4)
+    fig = go.Figure(data=[
+        go.Candlestick(
+            x=filtered.index,
+            open=filtered['Open'],
+            high=filtered['High'],
+            low=filtered['Low'],
+            close=filtered['Close'],
+            increasing_line_color='green',
+            decreasing_line_color='red',
+            name='Price'
+        )
+    ])
 
     if support:
-        ax.axhline(support, linestyle='--', color='blue', label=f'Support ({sup_day})')
+        fig.add_hline(y=support, line_dash="dash", line_color="blue", annotation_text=f"Support ({sup_day})")
     if resistance:
-        ax.axhline(resistance, linestyle='--', color='orange', label=f'Resistance ({res_day})')
+        fig.add_hline(y=resistance, line_dash="dash", line_color="orange", annotation_text=f"Resistance ({res_day})")
 
-    ax.set_title(f"{title} (Last 5 Days ending {selected_date}, 09:30–11:30)")
-    ax.legend()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M', tz=filtered.index.tz))
-    plt.xticks(rotation=45)
-    st.pyplot(fig)
+    fig.update_layout(
+        title=title + f" (Last 5 Days Ending {selected_date})",
+        xaxis_rangeslider_visible=False,
+        xaxis=dict(title='Time', showspikes=True, spikemode='across', spikecolor='gray', spikethickness=1),
+        yaxis=dict(title='Price', showspikes=True, spikemode='across', spikecolor='gray', spikethickness=1),
+        hovermode='x unified',
+        height=500
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 st.subheader("\U0001F4C8 1H Chart")
-plot_chart(df_1h, "1H Candles")
+plot_interactive_chart(df_1h, "1H Candles")
 
 st.subheader("\U0001F553 15-Minute Chart")
-plot_chart(df_15m, "15-Minute Candles")
+plot_interactive_chart(df_15m, "15-Minute Candles")
