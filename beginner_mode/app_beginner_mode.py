@@ -26,20 +26,23 @@ def load_and_prepare_data():
 # Load the data
 df_1d, df_1h, df_15m = load_and_prepare_data()
 
-# Select available dates from actual intersection of intraday charts
+# Selectable date from user input
 available_dates = sorted(list(set(df_1h.index.date) & set(df_15m.index.date)))
-selected_date = st.selectbox("\U0001F4C5 Select Date", available_dates, index=len(available_dates)-1)
+selected_date = st.selectbox("📅 Select Date", sorted(available_dates, reverse=True), index=0)
 
-# Define open from first 1H candle after 9:30 AM
-session_start = time(9, 00)
+# Define market session window
+session_start = time(9, 30)
+session_end = time(11, 30)
+
+# Get last 5 trading days including and before selected date
+last_5_dates = [d for d in available_dates if d <= selected_date][-5:]
+
+# Get today's open from 1D CSV
+daily_row = df_1d[df_1d['Date'] == selected_date]
 open_today = None
-try:
-    first_candle = df_1h[(df_1h.index.date == selected_date) & (df_1h.index.time >= session_start)].iloc[0]
-    open_today = first_candle['Open']
-except IndexError:
-    pass
+if not daily_row.empty:
+    open_today = daily_row.iloc[0]['Open']
 
-# Support and resistance based on prior days
 resistance, support = None, None
 res_day, sup_day = None, None
 if open_today:
@@ -54,32 +57,27 @@ if open_today:
         support = sup_row['Low'].values[0]
         sup_day = sup_row['Date'].values[0]
 
-# Display daily analysis
 st.subheader("\U0001F4CA 1D Support & Resistance Analysis")
 st.markdown(f"**Resistance:** `{resistance:.2f}` *(from {res_day})*" if resistance else "`No resistance found`")
 st.markdown(f"**Support:** `{support:.2f}` *(from {sup_day})*" if support else "`No support found`")
-st.markdown(f"**Today's Open (first 1H after 9:30 AM):** `{open_today:.2f}`" if open_today else "`No valid open found`")
+st.markdown(f"**Today's Open (first candle after 9:30 AM):** `{open_today:.2f}`" if open_today else "`No valid open found`")
 
-# Extract 09:30 and 10:30 candles from 1H
 st.subheader("\U0001F552 1H Key Candle Snapshots")
-snapshot_times = [time(9, 00), time(11, 00)]
 hourly_today = df_1h[df_1h.index.date == selected_date]
-snapshot_candles = hourly_today[hourly_today.index.map(lambda x: x.time() in snapshot_times)]
-if snapshot_candles.empty:
-    st.info("No 09:30 or 10:30 candles for this day.")
-else:
-    st.dataframe(snapshot_candles[['Open', 'High', 'Low', 'Close', 'Volume']])
+snapshot_window = hourly_today[(hourly_today.index.time >= session_start) & (hourly_today.index.time <= session_end)]
 
-# Chart plotting function with zoom on 09:30–11:30
+if snapshot_window.empty:
+    st.info("No candles between 09:30 and 11:30 for this day.")
+else:
+    st.dataframe(snapshot_window[['Open', 'High', 'Low', 'Close', 'Volume']])
 
 def plot_chart(df, title):
     fig, ax = plt.subplots(figsize=(10, 3))
-    filtered = df[(df.index.date == selected_date) &
-                  (df.index.time >= time(9, 00)) &
-                  (df.index.time <= time(11, 00))].copy()
+    mask = pd.Series(df.index.date, index=df.index).isin(last_5_dates)
+    filtered = df[mask & (df.index.time >= session_start) & (df.index.time <= session_end)].copy()
 
     if filtered.empty:
-        st.warning(f"No {title} data between 09:30–11:30 AM for {selected_date}.")
+        st.warning(f"No {title} data between 09:30–11:30 AM for selected 5-day window.")
         return
 
     filtered['EMA 9'] = filtered['Close'].ewm(span=9).mean()
@@ -93,25 +91,24 @@ def plot_chart(df, title):
     for idx, row in filtered.iterrows():
         color = 'green' if row['Close'] > row['Open'] else 'red'
         ax.vlines(x=idx, ymin=row['Low'], ymax=row['High'], color=color, linewidth=1)
-        ax.vlines(x=idx, ymin=row['Open'], ymax=row['Close'], color=color, linewidth=4)
+        if row['Open'] == row['Close']:
+            ax.scatter(idx, row['Open'], color=color, s=20)
+        else:
+            ax.vlines(x=idx, ymin=row['Open'], ymax=row['Close'], color=color, linewidth=4)
 
     if support:
         ax.axhline(support, linestyle='--', color='blue', label=f'Support ({sup_day})')
     if resistance:
         ax.axhline(resistance, linestyle='--', color='orange', label=f'Resistance ({res_day})')
 
-    ax.set_title(f"{title} for {selected_date}")
+    ax.set_title(f"{title} (Last 5 Days ending {selected_date}, 09:30–11:30)")
     ax.legend()
-    ax.set_xlim([pd.Timestamp(f"{selected_date} 09:00", tz=filtered.index.tz),
-                 pd.Timestamp(f"{selected_date} 11:00", tz=filtered.index.tz)])
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M', tz=filtered.index.tz))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%m-%d %H:%M', tz=filtered.index.tz))
     plt.xticks(rotation=45)
     st.pyplot(fig)
 
-# Plot 1H and 15M windows
 st.subheader("\U0001F4C8 1H Chart")
 plot_chart(df_1h, "1H Candles")
 
 st.subheader("\U0001F553 15-Minute Chart")
 plot_chart(df_15m, "15-Minute Candles")
-
