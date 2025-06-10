@@ -23,7 +23,9 @@ def load_data(ticker):
 
     df_1d.index = df_1d.index.tz_localize('UTC').tz_convert('US/Eastern')
     df_1h.index = df_1h.index.tz_localize('UTC').tz_convert('US/Eastern')
-    df_15m.index = df_15m.index.tz_localize('UTC').tz_convert('US/Eastern')
+    # df_15m.index = df_15m.index.tz_localize('UTC').tz_convert('US/Eastern')
+    df_15m.index = df_15m.index.tz_convert('US/Eastern')
+
 
     return df_1d, df_1h, df_15m
 
@@ -46,8 +48,12 @@ zones_15m_full = detect_zones(df_15m_filtered)
 zones_1h = simplify_zones(zones_1h_full, df_1h_filtered, window=0.035)
 zones_15m = simplify_zones(zones_15m_full, df_15m_filtered)
 
-signals_1h = analyze_with_zones(df_1h_filtered)
-signals_15m = analyze_with_zones(df_15m_filtered)
+# Analyze signals with verbose logging
+# signals_1h = analyze_with_zones(df_1h_filtered, verbose=True)
+# signals_15m = analyze_with_zones(df_15m_filtered, verbose=True)
+signals_1h = analyze_with_zones(df_1h_filtered, selected_date=selected_date, verbose=True)
+signals_15m = analyze_with_zones(df_15m_filtered, selected_date=selected_date, verbose=True)
+
 
 def plot_chart(df, title, signals, zones):
     fig = go.Figure()
